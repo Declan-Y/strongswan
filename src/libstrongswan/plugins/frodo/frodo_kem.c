@@ -254,21 +254,6 @@ static bool encaps_shared_secret(private_key_exchange_t *this, chunk_t public_ke
 }
 
 /**
- * Select one of the two input arrays to copy into out depending on the
- * selector, which is either -1 (0xff) or 0. If it's -1 then use a, else use b.
- */
-static void select_fin_k(int8_t selector, uint8_t *out, uint8_t *a,
-						 uint8_t *b, size_t len)
-{
-	size_t i;
-
-	for (i = 0; i < len; i++)
-	{
-		out[i] = (selector & a[i]) | (~selector & b[i]);
-	}
-}
-
-/**
  * Decapsulate the shared secret using the secret key
  */
 static bool decaps_shared_secret(private_key_exchange_t *this, chunk_t ciphertext)
@@ -298,7 +283,6 @@ static bool decaps_shared_secret(private_key_exchange_t *this, chunk_t ciphertex
 	uint8_t kprime[ss_len];
 	uint16_t Bp[n_x_nb], BBp[n_x_nb];
 	uint16_t W[nb_x_nb], C[nb_x_nb], CC[nb_x_nb];
-	int8_t selector;
 
 	/* Compute W = C - Bp*S (mod q), and decode the randomness mu' */
 	frodo_unpack(Bp, countof(Bp), ct_c1, ct_c1_len, log_q);
@@ -325,12 +309,12 @@ static bool decaps_shared_secret(private_key_exchange_t *this, chunk_t ciphertex
 		BBp[i] = BBp[i] & ((1 << log_q) - 1);
 	}
 
-	/* Compare (Bp == BBp && C == CC) and handle the result in constant time
-	 * without branching, select k' if the values are equal and the selector
-	 * is -1 (0xff), else it's 0 and s is used */
-	selector = -(int8_t)memeq_const(Bp, BBp, sizeof(Bp)) &
-			   -(int8_t)memeq_const(C,  CC,  sizeof(C));
-	select_fin_k(selector, Fin_k, kprime, sk_s, ss_len);
+	/* Copy s as fallback */
+	memcpy(Fin_k, sk_s, ss_len);
+	/* Compare (Bp == BBp && C == CC) and copy k' in constant time if the
+	 * values are equal */
+	memcpy_cond(Fin_k, kprime, ss_len,
+				memeq_const(Bp, BBp, sizeof(Bp)) & memeq_const(C, CC, sizeof(C)));
 
 	/* Do either ss = F(ct || k')  or ss = F(ct || s) depending on the above */
 	if (!this->xof->set_seed(this->xof, Fin) ||
